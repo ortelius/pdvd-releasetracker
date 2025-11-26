@@ -28,6 +28,33 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
 
+      - name: Calculate and Output Next Version Tag (Minor Bump)
+        id: bump
+        shell: bash
+        run: |
+          # 1. Get the latest semantic tag (vX.Y.Z)
+          # If no tag exists, we use a placeholder (v0.9.9) to initiate v1.0.0
+          LATEST_TAG=$(git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=0 2>/dev/null || echo "v0.9.9")
+          
+          if [ "$LATEST_TAG" == "v0.9.9" ]; then
+              # Start at v1.0.0 if no tags found
+              NEXT_TAG="v1.0.0"
+              echo "Starting versioning from scratch: $NEXT_TAG"
+          else
+              # 2. Strip 'v' prefix and split version components
+              VERSION_STRING=${LATEST_TAG:1} 
+              MAJOR=$(echo $VERSION_STRING | cut -d. -f1)
+              MINOR=$(echo $VERSION_STRING | cut -d. -f2)
+              
+              # 3. Increment the Minor version and reset the Patch version
+              NEW_MINOR=$((MINOR + 1))
+              NEXT_TAG="v$MAJOR.$NEW_MINOR.0"
+          fi
+          
+          # 4. Export the result for use in subsequent jobs
+          echo "Calculated next tag: $NEXT_TAG"
+          echo "next_tag=$NEXT_TAG" >> $GITHUB_OUTPUT
+
       # -- Setup the Go environment --
       # Uses the '1.x' major version for Go
       - name: Set up Go
@@ -39,21 +66,56 @@ jobs:
       - name: Install dependencies
         run: go mod tidy
 
-      # -- Build the Go CLI binary --
-      # The '-o' flag specifies the output filename (releasetracker)
-      - name: Build binaries
+      # Build the binary and compress it into a .tar.gz (or .zip for Windows)
+      - name: Build and Package Binaries
+        id: package
+        shell: bash
         run: |
-          mkdir -p build/${{ matrix.goos }}-${{ matrix.goarch }}
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o build/${{ matrix.goos }}-${{ matrix.goarch }}/releasetracker.exe
-          else
-            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o build/${{ matrix.goos }}-${{ matrix.goarch }}/releasetracker
-          fi
+          BUILD_NAME="releasetracker"
+          PLATFORM="${{ matrix.goos }}-${{ matrix.goarch }}"
+          OUTPUT_PATH="build/$PLATFORM"
+          
+          mkdir -p $OUTPUT_PATH
 
-      # -- Archive and upload the binary as an artifact --
-      # This makes the compiled executable available for download/use
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o $OUTPUT_PATH/$BUILD_NAME.exe
+            # Create a zip archive for Windows
+            zip -j $BUILD_NAME-$PLATFORM.zip $OUTPUT_PATH/$BUILD_NAME.exe
+            ARCHIVE_PATH="$BUILD_NAME-$PLATFORM.zip"
+          else
+            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o $OUTPUT_PATH/$BUILD_NAME
+            # Create a tar.gz archive for Linux/macOS
+            # -C $OUTPUT_PATH ensures the binary is at the root of the archive
+            tar -czf $BUILD_NAME-$PLATFORM.tar.gz -C $OUTPUT_PATH $BUILD_NAME
+            ARCHIVE_PATH="$BUILD_NAME-$PLATFORM.tar.gz"
+          fi
+          
+          echo "archive_path=$ARCHIVE_PATH" >> $GITHUB_OUTPUT
+
+      # Upload the archive so the final job can download it
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: releasetracker-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: build/${{ matrix.goos }}-${{ matrix.goarch }}
+          name: ${{ steps.package.outputs.archive_path }}
+          path: ${{ steps.package.outputs.archive_path }}
+          retention-days: 7
+
+      # Step 3.1: Download all archives uploaded in the previous job
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts_to_release 
+
+      # Step 3.2: Create the Tag and Release
+      - name: Create Tag and Release with Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          # Use the calculated tag name from the first job
+          tag_name: ${{ needs.version-and-tag.outputs.next_tag }}
+          # Attach the release to the current commit SHA
+          target_commitish: ${{ github.sha }}
+          draft: false
+          prerelease: false
+          # Attach all downloaded archives as assets
+          files: artifacts_to_release/*/*
+          generate_release_notes: true
