@@ -1,0 +1,59 @@
+# .github/workflows/build.yml
+name: Go Build
+
+# Trigger the workflow on pushes to the main branch
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow manual running of the workflow from the GitHub UI
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Run the job on the latest version of Ubuntu
+    name: Build Go binaries
+    runs-on: ubuntu-latest
+
+    # Define all the combinations of operating systems & architectures
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+      fail-fast: false # Continue building other archs if one fails
+
+    steps:
+      # -- Checkout the repository code --
+      - name: Checkout source
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
+
+      # -- Setup the Go environment --
+      # Uses the '1.x' major version for Go
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6
+        with:
+          go-version-file: "go.mod" # Reads version from go.mod
+          cache: true # Cache dependencies
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      # -- Build the Go CLI binary --
+      # The '-o' flag specifies the output filename (releasetracker)
+      - name: Build binaries
+        run: |
+          mkdir -p build/${{ matrix.goos }}-${{ matrix.goarch }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o build/${{ matrix.goos }}-${{ matrix.goarch }}/releasetracker.exe
+          else
+            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o build/${{ matrix.goos }}-${{ matrix.goarch }}/releasetracker
+          fi
+
+      # -- Archive and upload the binary as an artifact --
+      # This makes the compiled executable available for download/use
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: releasetracker-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: build/${{ matrix.goos }}-${{ matrix.goarch }}

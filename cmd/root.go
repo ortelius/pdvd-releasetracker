@@ -1,5 +1,5 @@
 // Package cmd implements the command line interface (CLI) commands
-// for interacting with the CVE2Release-Tracker API, including uploading releases,
+// for interacting with the pdvd-releasetracker API, including uploading releases,
 // generating SBOMs using Syft, and fetching release details.
 package cmd
 
@@ -18,8 +18,8 @@ import (
 
 	"github.com/anchore/syft/syft"
 	"github.com/anchore/syft/syft/format/cyclonedxjson"
-	"github.com/ortelius/cve2release-tracker/model"
-	"github.com/ortelius/cve2release-tracker/util"
+	"github.com/ortelius/pdvd-backend/v12/model"
+	"github.com/ortelius/pdvd-backend/v12/util"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
@@ -40,7 +40,7 @@ var (
 // -------------------- CLI COMMANDS --------------------
 
 var rootCmd = &cobra.Command{
-	Use:   "cve2release-cli",
+	Use:   "releasetracker",
 	Short: "CVE2Release‑Tracker CLI for managing releases and SBOMs",
 }
 
@@ -170,11 +170,13 @@ func processDirectory(dir string) error {
 		}
 	}
 
-	var sbomJSON map[string]interface{}
-	if err := json.Unmarshal(sbomContent, &sbomJSON); err != nil {
-		return fmt.Errorf("SBOM is not valid JSON: %w", err)
+	// Basic validation: ensure it's valid JSON
+	var checkJSON map[string]interface{}
+	if err := json.Unmarshal(sbomContent, &checkJSON); err != nil {
+		return fmt.Errorf("SBOM content is not valid JSON: %w", err)
 	}
-	if bomFormat, ok := sbomJSON["bomFormat"].(string); !ok || bomFormat != "CycloneDX" {
+	// Check for the required CycloneDX format field
+	if bomFormat, ok := checkJSON["bomFormat"].(string); !ok || bomFormat != "CycloneDX" {
 		return fmt.Errorf("SBOM must be in CycloneDX format (bomFormat field missing or incorrect)")
 	}
 
@@ -215,6 +217,7 @@ func processDirectory(dir string) error {
 		}
 	}
 
+	// Using json.RawMessage(sbomContent) as requested
 	sbomObj := model.NewSBOM()
 	sbomObj.Content = json.RawMessage(sbomContent)
 
@@ -248,7 +251,7 @@ func processDirectory(dir string) error {
 // Returns: ScorecardAPIResponse (matches API structure), aggregate score, error
 func fetchOpenSSFScorecard(gitURL, commitSha string) (*model.ScorecardAPIResponse, float64, error) {
 	// Parse the Git URL to extract platform, org, and repo
-	// Example: https://github.com/ortelius/cve2release-tracker
+	// Example: https://github.com/ortelius/pdvd-releasetracker
 	platform, org, repo, err := parseGitURL(gitURL)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to parse git URL: %w", err)
